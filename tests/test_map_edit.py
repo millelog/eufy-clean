@@ -95,6 +95,18 @@ def test_map_edit_response_parsed():
     assert state.last_map_edit == {"method": "divide_room", "seq": 3, "result": "failed", "fail_code": "area_small"}
 
 
+
+def test_map_edit_reply_on_170():
+    # E25: rename echoed back as just {method, seq} on 170; full request echoes are ignored
+    reply = MapEditResponse(method=MapEditRequest.RENAME_ROOM, seq=2)
+    state, _ = update_state(VacuumState(), {"170": encode_message(reply)})
+    assert state.last_map_edit == {"method": "rename_room", "seq": 2, "result": "success", "fail_code": ""}
+    req = MapEditRequest(method=MapEditRequest.RENAME_ROOM, seq=5, map_id=4)
+    req.room_desc.id, req.room_desc.name = 1, "x"
+    state, _ = update_state(VacuumState(), {"170": encode_message(req)})
+    assert state.last_map_edit == {}
+
+
 if __name__ == "__main__":
     test_rename_room()
     test_merge_and_divide()

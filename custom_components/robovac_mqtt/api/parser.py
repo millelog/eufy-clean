@@ -191,6 +191,14 @@ def _parse_robot_telemetry(value: str) -> dict[str, Any] | None:
     return {"x": inner[4], "y": inner[5]}
 
 
+def _is_map_edit_reply(key: str, value: str) -> bool:
+    """DPS 170 also echoes full requests; a reply has no map_id and no edit payload."""
+    if key == DPS_MAP["MAP_EDIT"]:
+        return True
+    req = decode(MapEditRequest, value)
+    return not req.map_id and req.WhichOneof("Param") is None
+
+
 def update_state(
     state: VacuumState, dps: dict[str, Any]
 ) -> tuple[VacuumState, dict[str, Any]]:
@@ -613,8 +621,8 @@ def _process_other_dps(
                     changes["robot_position_y"] = raw_y
                     track_received_field(state, changes, "robot_position")
 
-            elif key == DPS_MAP["MAP_EDIT"] and value:
-                resp = decode(MapEditResponse, value)
+            elif key in (DPS_MAP["MAP_EDIT"], DPS_MAP["MAP_EDIT_REQUEST"]) and value and _is_map_edit_reply(key, value):
+                resp = decode(MapEditResponse, value)  # the E25 replies on 170, in MapEditResponse shape
                 changes["last_map_edit"] = {
                     "method": MapEditRequest.Method.Name(resp.method).lower(),
                     "seq": resp.seq,
