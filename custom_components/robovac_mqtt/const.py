@@ -574,7 +574,6 @@ KNOWN_UNPROCESSED_DPS: frozenset[str] = frozenset(
     {
         DPS_MAP["DIRECTION"],  # 155 - RemoteCtrl echo
         DPS_MAP["MULTI_MAP_SW"],  # 156 - multi-map toggle (also in DPS 176)
-        DPS_MAP["MAP_EDIT"],  # 164 - MapEditResponse ack
         DPS_MAP[
             "MAP_STREAM"
         ],  # 166 - debug/metadata on T2351 (map data is local P2P only)

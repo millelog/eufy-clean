@@ -68,6 +68,7 @@ class VacuumState:
     map_id: int = 0
     map_url: str | None = None
     rooms: list[dict[str, Any]] = field(default_factory=list)
+    last_map_edit: dict[str, Any] = field(default_factory=dict)  # DPS 164 MapEditResponse
     scenes: list[dict[str, Any]] = field(default_factory=list)
 
     # Detailed Status

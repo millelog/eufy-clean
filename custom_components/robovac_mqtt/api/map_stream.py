@@ -9,7 +9,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
-from ..proto.cloud import stream_pb2
+from ..proto.cloud import common_pb2, stream_pb2
 from ..utils import decode_varint
 
 _LOGGER = logging.getLogger(__name__)
@@ -111,6 +111,9 @@ class MapData:
     virtual_walls: list[tuple[tuple[int, int], tuple[int, int]]] = field(default_factory=list)
     forbidden_zones: list[list[tuple[int, int]]] = field(default_factory=list)
     ban_mop_zones: list[list[tuple[int, int]]] = field(default_factory=list)
+    # room id -> {floor, scene, order, custom{clean_type, fan, mop, extent, clean_times}} from RoomParams
+    rooms_meta: dict[int, dict] = field(default_factory=dict)
+    docks: list[tuple[int, int, int]] = field(default_factory=list)  # (x_cm, y_cm, theta) from MapInfo
 
     def room_id_at_normalized(self, nx: float, ny: float) -> int:
         """Return the room id under a normalized point on the *rendered* map image.
@@ -470,6 +473,7 @@ def try_extract_map_data(hex_data: str) -> MapData | None:
     virtual_walls: list[tuple[tuple[int, int], tuple[int, int]]] = []
     forbidden_zones: list[list[tuple[int, int]]] = []
     ban_mop_zones: list[list[tuple[int, int]]] = []
+    rooms_meta: dict[int, dict] = {}
 
     try:
         backup = stream_pb2.MapBackup().FromString(proto_bytes)
@@ -491,6 +495,7 @@ def try_extract_map_data(hex_data: str) -> MapData | None:
                 if not name:
                     name = _ROOM_SCENE_NAMES.get(room.scene.type, f"ROOM {room.id}")
                 room_names[room.id] = name
+                rooms_meta[room.id] = _room_meta(room)
             _LOGGER.debug("RoomParams room_names: %s", room_names)
 
             rz = backup.restricted_zone
@@ -549,7 +554,51 @@ def try_extract_map_data(hex_data: str) -> MapData | None:
         virtual_walls=virtual_walls,
         forbidden_zones=forbidden_zones,
         ban_mop_zones=ban_mop_zones,
+        rooms_meta=rooms_meta,
+        docks=[(d.x, d.y, d.theta) for d in [v2.pose for v2 in map_msg.info.docks_v2] or map_msg.info.docks],
     )
+
+
+def _room_meta(room: Any) -> dict:
+    """RoomParams.Room -> plain dict of the fields the map card edits."""
+    c = room.custom
+    return {
+        "floor": ("", "carpet", "wood", "tile")[room.floor.type] if room.floor.type < 4 else "",
+        "scene": common_pb2.RoomScene.Type.Name(room.scene.type).lower().replace("unknow", ""),
+        "order": room.order.value,
+        "custom": {
+            "clean_type": c.clean_type.value,
+            "fan": c.fan.suction,
+            "mop": c.mop_mode.level,
+            "corner": c.mop_mode.corner_clean,
+            "extent": c.clean_extent.value,
+            "clean_times": c.clean_times,
+        } if room.HasField("custom") else None,
+    }
+
+
+def map_grid(md: MapData) -> bytes:
+    """One byte per pixel, top row first (as rendered): room_id << 2 | pixel type."""
+    w, h, raw, res = md.width, md.height, md.raw_pixels, md.resolution or 5
+    rp, rw, rh = md.room_pixels, md.room_outline_width, md.room_outline_height
+    # ponytail: same offset sign as render_map_png; unverified, E25 sends equal origins
+    dx = round((md.origin_x - md.room_outline_origin_x) / res)
+    dy = round((md.origin_y - md.room_outline_origin_y) / res)
+    out = bytearray(w * h)
+    for sy in range(h):
+        row = (h - 1 - sy) * w
+        for sx in range(w):
+            i = sy * w + sx
+            pv = (raw[i >> 2] >> ((i & 3) * 2)) & 3 if (i >> 2) < len(raw) else 0
+            rid = 0
+            if rp:
+                rx, ry = sx - dx, sy - dy
+                if 0 <= rx < rw and 0 <= ry < rh and ry * rw + rx < len(rp):
+                    rid = rp[ry * rw + rx] >> 2
+                    if rid >= 60:  # p2p gap/obstacle/unknown markers, not rooms
+                        rid = 0
+            out[row + sx] = rid << 2 | pv
+    return bytes(out)
 
 
 def try_extract_map_description(hex_data: str) -> tuple[int, str] | None:

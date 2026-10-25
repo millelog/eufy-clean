@@ -35,6 +35,7 @@ from ..proto.cloud.consumable_pb2 import ConsumableResponse
 from ..proto.cloud.control_pb2 import ModeCtrlRequest
 from ..proto.cloud.error_code_pb2 import ErrorCode
 from ..proto.cloud.language_pb2 import LanguageResponse
+from ..proto.cloud.map_edit_pb2 import MapEditRequest, MapEditResponse
 from ..proto.cloud.multi_maps_pb2 import MultiMapsManageResponse
 from ..proto.cloud.scene_pb2 import SceneResponse
 from ..proto.cloud.station_pb2 import StationResponse
@@ -611,6 +612,16 @@ def _process_other_dps(
                     changes["robot_position_x"] = raw_x
                     changes["robot_position_y"] = raw_y
                     track_received_field(state, changes, "robot_position")
+
+            elif key == DPS_MAP["MAP_EDIT"] and value:
+                resp = decode(MapEditResponse, value)
+                changes["last_map_edit"] = {
+                    "method": MapEditRequest.Method.Name(resp.method).lower(),
+                    "seq": resp.seq,
+                    "result": MapEditResponse.Result.Name(resp.result).lower(),
+                    "fail_code": MapEditResponse.FailCode.Value.Name(resp.fail_code.value).lower()
+                    if resp.result == MapEditResponse.FAILED else "",
+                }
 
             elif key in KNOWN_UNPROCESSED_DPS:
                 _LOGGER.debug(

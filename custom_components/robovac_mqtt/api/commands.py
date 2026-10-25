@@ -363,9 +363,9 @@ def build_set_room_custom_command(
 FLOOR_TYPES = {"carpet": Floor.BLANKET, "wood": Floor.WOOD, "tile": Floor.CERAMIC}
 
 
-def build_map_edit_command(cmd: str, map_id: int, **kwargs: Any) -> dict[str, str]:
-    """Build a MapEditRequest for rename_room / merge_rooms / divide_room."""
-    req = MapEditRequest(map_id=int(map_id), seq=1)
+def build_map_edit_command(cmd: str, map_id: int, seq: int = 1, **kwargs: Any) -> dict[str, str]:
+    """Build a MapEditRequest. Geometry kwargs are already in world cm."""
+    req = MapEditRequest(map_id=int(map_id), seq=int(seq))
     if cmd == "rename_room":
         req.method = MapEditRequest.RENAME_ROOM
         desc = req.room_desc
@@ -385,9 +385,58 @@ def build_map_edit_command(cmd: str, map_id: int, **kwargs: Any) -> dict[str, st
         req.method = MapEditRequest.DIVIDE_ROOM
         req.divide_room.room_id = int(kwargs["room_id"])
         req.divide_room.points.extend(Point(x=x, y=y) for x, y in kwargs["points_cm"])
+    elif cmd == "reset_rooms":
+        req.method = MapEditRequest.RESET_ROOMS
+    elif cmd == "set_restricted_zones":
+        req.method = MapEditRequest.SET_RESTRICTED_ZONES
+        rz = req.restricted_zone
+        rz.map_id = int(map_id)
+        for (x0, y0), (x1, y1) in kwargs.get("virtual_walls", []):
+            rz.virtual_walls.add(p0=Point(x=x0, y=y0), p1=Point(x=x1, y=y1))
+        for field_name in ("forbidden_zones", "ban_mop_zones"):
+            for quad in kwargs.get(field_name, []):
+                p = [Point(x=x, y=y) for x, y in quad]
+                getattr(rz, field_name).add(p0=p[0], p1=p[1], p2=p[2], p3=p[3])
+    elif cmd == "set_room_order":
+        req.method = MapEditRequest.SET_ROOMS_CUSTOM
+        rooms = req.rooms_custom.rooms_order.rooms
+        for order, rid in enumerate(kwargs["room_ids"], 1):
+            rooms.add(id=int(rid), order=order)
+    elif cmd == "rotate_map":
+        req.method = MapEditRequest.ROTATION
+        req.rotation.angle = int(kwargs["angle"]) % 360
     else:
         return {}
     return {DPS_MAP["MAP_EDIT_REQUEST"]: encode_message(req)}
+
+
+MAP_EDIT_COMMANDS = (
+    "rename_room", "merge_rooms", "divide_room", "reset_rooms",
+    "set_restricted_zones", "set_room_order", "rotate_map",
+)
+
+
+def build_goto_command(x_cm: int, y_cm: int, map_id: int, spot: bool = False) -> dict[str, str]:
+    """Send the robot to a world point; spot=True cleans a spot there."""
+    req = ModeCtrlRequest(method=EUFY_CLEAN_CONTROL.START_GOTO_CLEAN)
+    req.go_to.destination.x, req.go_to.destination.y = int(x_cm), int(y_cm)
+    req.go_to.type = req.go_to.GOTO_SPOT if spot else req.go_to.GOTO_DESTINATION
+    req.go_to.map_id = int(map_id)
+    if spot:
+        req.go_to.clean_times = 1
+    return {DPS_MAP["PLAY_PAUSE"]: encode_message(req)}
+
+
+def build_multi_map_command(cmd: str, cloud_mapid: int, name: str = "") -> dict[str, str]:
+    """map_rename / map_delete on the robot (DPS 172)."""
+    req = MultiMapsManageRequest(seq=1)
+    if cmd == "map_rename":
+        req.method = MultiMapsManageRequest.MAP_RENAME
+        req.rename.cloud_mapid, req.rename.new_name = int(cloud_mapid), str(name)
+    else:
+        req.method = MultiMapsManageRequest.MAP_DELETE
+        req.common.cloud_mapid = int(cloud_mapid)
+    return {DPS_MAP["MULTI_MAP_MANAGE"]: encode_message(req)}
 
 
 def build_reset_accessory_command(reset_type: int) -> dict[str, str]:
@@ -734,7 +783,11 @@ def build_command(
         return build_set_activity_log_command(bool(kwargs.get("active", True)))
     if cmd == "detangle_brush":
         return {SCALAR_DPS["DETANGLE"]: 1}
-    if cmd in ("rename_room", "merge_rooms", "divide_room"):
+    if cmd in MAP_EDIT_COMMANDS:
         return build_map_edit_command(cmd, kwargs.pop("map_id", 3), **kwargs)
+    if cmd == "goto":
+        return build_goto_command(kwargs["x_cm"], kwargs["y_cm"], kwargs.get("map_id", 3), bool(kwargs.get("spot")))
+    if cmd in ("map_rename", "map_delete"):
+        return build_multi_map_command(cmd, kwargs["cloud_mapid"], kwargs.get("name", ""))
 
     return {}

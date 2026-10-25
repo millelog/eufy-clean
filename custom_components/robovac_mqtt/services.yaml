@@ -105,3 +105,13 @@ forget_map:
         number:
           min: 1
           mode: box
+get_map:
+  name: Get map
+  description: >-
+    Map snapshot for the map card: one byte per pixel (room_id << 2 | pixel type, top row
+    first), rooms with floor, type, order and saved prefs, zones and walls, robot, dock and
+    trail. Geometry is in map pixels. Empty until the robot has sent a map.
+  target:
+    entity:
+      domain: vacuum
+      integration: robovac_mqtt

@@ -15,6 +15,8 @@ from typing import Any
 from paho.mqtt import client as mqtt
 
 _LOGGER = logging.getLogger(__name__)
+# Raw traffic log incl. the app's /req commands: logger.set_level custom_components.robovac_mqtt.sniff: debug
+_SNIFF = logging.getLogger("custom_components.robovac_mqtt.sniff")
 
 
 def get_blocking_mqtt_client(
@@ -227,6 +229,8 @@ class EufyCleanClient:
                 biz_topic = f"biz/eufy_home/{self.device_model}/{self.device_id}/res"
                 _LOGGER.debug("Subscribing to %s", biz_topic)
                 client.subscribe(biz_topic)
+                for kind in ("cmd", "biz"):
+                    client.subscribe(f"{kind}/eufy_home/{self.device_model}/{self.device_id}/req")
         else:
             _LOGGER.error("Failed to connect to MQTT, return code %d", rc)
 
@@ -243,6 +247,9 @@ class EufyCleanClient:
         try:
             payload = msg.payload
             _LOGGER.debug("Received MQTT message on %s", msg.topic)
+            _SNIFF.debug("%s %s", msg.topic, payload.decode("utf-8", errors="replace"))
+            if msg.topic.endswith("/req"):
+                return
             biz_topic = f"biz/eufy_home/{self.device_model}/{self.device_id}/res"
             if msg.topic == biz_topic:
                 if self._on_biz_message_callback and self._loop:

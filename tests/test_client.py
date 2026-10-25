@@ -39,7 +39,7 @@ def test_on_connect_thread_safe_event():
     client._on_connect(mock_mqtt, None, {}, 0)
 
     mock_loop.call_soon_threadsafe.assert_called_once_with(client._connected_event.set)
-    assert mock_mqtt.subscribe.call_count == 2
+    assert mock_mqtt.subscribe.call_count == 4  # res + the sniffer's req topics
     mock_mqtt.subscribe.assert_any_call("cmd/eufy_home/T2320/TEST123/res")
     mock_mqtt.subscribe.assert_any_call("biz/eufy_home/T2320/TEST123/res")
 

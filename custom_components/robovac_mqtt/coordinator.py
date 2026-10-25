@@ -36,6 +36,7 @@ from .api.legacy_parser import update_state_legacy
 from .api.local_tuya import LocalTuyaClient, LocalTuyaError
 from .api.map_stream import (
     MapData,
+    map_grid,
     parse_biz_protocol41,
     render_map_png,
     try_decode_as_dynamic_data,
@@ -151,6 +152,8 @@ class EufyCleanCoordinator(DataUpdateCoordinator[VacuumState]):
         self._robot_pixel: tuple[int, int] | None = None
         self._robot_trail: list[tuple[int, int]] = []
         self._dock_pixel: tuple[int, int] | None = None
+        self._robot_theta = 0  # rad * 100, from the last DynamicData pose
+        self._map_edit_seq = 0
         self._dock_arrival_time: float | None = None
         self._last_robot_render: float = 0.0
         self.map_image: bytes | None = None
@@ -465,6 +468,7 @@ class EufyCleanCoordinator(DataUpdateCoordinator[VacuumState]):
         if len(hex_data) < 200:
             pose = try_decode_as_dynamic_data(hex_data)
             if pose is not None:
+                self._robot_theta = pose[2]
                 robot_px = self._pose_to_pixel(pose[0], pose[1])
                 if robot_px is not None:
                     # Only accumulate trail during active cleaning — poses that arrive
@@ -521,6 +525,7 @@ class EufyCleanCoordinator(DataUpdateCoordinator[VacuumState]):
             map_data.virtual_walls = self._map_data.virtual_walls
             map_data.forbidden_zones = self._map_data.forbidden_zones
             map_data.ban_mop_zones = self._map_data.ban_mop_zones
+            map_data.rooms_meta = self._map_data.rooms_meta
 
         self._map_data = map_data
         self._rerender_map()
@@ -588,6 +593,50 @@ class EufyCleanCoordinator(DataUpdateCoordinator[VacuumState]):
         wx = md.origin_x + nx * md.width * res
         wy = md.origin_y + (md.height - 1 - ny * md.height) * res
         return round(wx), round(wy)
+
+    def next_map_edit_seq(self) -> int:
+        """Sequence number for a MapEditRequest; the robot echoes it in its DPS 164 reply."""
+        self._map_edit_seq = self._map_edit_seq % 65535 + 1
+        return self._map_edit_seq
+
+    def cm_to_grid(self, x_cm: float, y_cm: float) -> list[float]:
+        """World cm -> map-card grid pixels (top-left origin, Y flipped); inverse of normalized_point_to_cm."""
+        md = self._map_data
+        assert md is not None
+        res = md.resolution or 5
+        return [round((x_cm - md.origin_x) / res, 2), round(md.height - 1 - (y_cm - md.origin_y) / res, 2)]
+
+    def map_snapshot(self) -> dict[str, Any]:
+        """Everything the map card draws, geometry in grid pixels (see map_grid)."""
+        md = self._map_data
+        if md is None:
+            return {}
+        g = self.cm_to_grid
+        flip = lambda p: [p[0], md.height - 1 - p[1]]  # noqa: E731  source pixel -> grid
+        robot = self._robot_pixel
+        if self.data.activity in ("docked", "idle") and self._dock_pixel is not None:
+            robot = self._dock_pixel
+        names = {r["id"]: r.get("name") for r in self.data.rooms}
+        ids = sorted(set(names) | set(md.room_names) | set(md.rooms_meta))
+        return {
+            "map_id": self.data.map_id,
+            "width": md.width,
+            "height": md.height,
+            "resolution": md.resolution or 5,
+            "grid": base64.b64encode(map_grid(md)).decode(),
+            "rooms": [
+                {"id": rid, "name": names.get(rid) or md.room_names.get(rid) or f"Room {rid}",
+                 **md.rooms_meta.get(rid, {})}
+                for rid in ids
+            ],
+            "virtual_walls": [[*g(*a), *g(*b)] for a, b in md.virtual_walls],
+            "forbidden_zones": [[g(*p) for p in z] for z in md.forbidden_zones],
+            "ban_mop_zones": [[g(*p) for p in z] for z in md.ban_mop_zones],
+            "robot": flip(robot) + [self._robot_theta / 100] if robot else None,
+            "dock": g(*md.docks[0][:2]) if md.docks else (flip(self._dock_pixel) if self._dock_pixel else None),
+            "trail": [flip(p) for p in self._robot_trail],
+            "maps": {str(k): v for k, v in self.last_seen_maps.items()},
+        }
 
     def room_id_at_normalized(self, nx: float, ny: float) -> tuple[int, str | None]:
         """Resolve the (room id, name) under a normalized point on the rendered map.
@@ -911,6 +960,8 @@ class EufyCleanCoordinator(DataUpdateCoordinator[VacuumState]):
                         virtual_walls=[(tuple(w[0]), tuple(w[1])) for w in md_raw.get("virtual_walls", [])],
                         forbidden_zones=[[tuple(p) for p in zone] for zone in md_raw.get("forbidden_zones", [])],
                         ban_mop_zones=[[tuple(p) for p in zone] for zone in md_raw.get("ban_mop_zones", [])],
+                        rooms_meta={int(k): v for k, v in md_raw.get("rooms_meta", {}).items()},
+                        docks=[tuple(d) for d in md_raw.get("docks", [])],
                     )
                     _LOGGER.debug("Loaded map data from storage for %s", self.device_name)
                 except Exception as exc:
@@ -947,6 +998,8 @@ class EufyCleanCoordinator(DataUpdateCoordinator[VacuumState]):
                 "virtual_walls": [[list(p) for p in wall] for wall in md.virtual_walls],
                 "forbidden_zones": [[list(p) for p in zone] for zone in md.forbidden_zones],
                 "ban_mop_zones": [[list(p) for p in zone] for zone in md.ban_mop_zones],
+                "rooms_meta": {str(k): v for k, v in md.rooms_meta.items()},
+                "docks": [list(d) for d in md.docks],
             }
         await self._store.async_save(data)
 

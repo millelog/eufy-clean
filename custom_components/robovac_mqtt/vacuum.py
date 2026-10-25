@@ -28,7 +28,7 @@ from homeassistant.helpers.issue_registry import (
 )
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api.commands import build_command
+from .api.commands import MAP_EDIT_COMMANDS, build_command
 from .api.map_stream import carpet_rects
 from .const import (
     DOMAIN,
@@ -157,6 +157,10 @@ async def async_setup_entry(
         },
         "async_room_at_point",
         supports_response=SupportsResponse.ONLY,
+    )
+    # Everything the map card draws: grid, rooms (+floor/type/order/prefs), zones, robot, dock.
+    platform.async_register_entity_service(
+        "get_map", {}, "async_get_map", supports_response=SupportsResponse.ONLY
     )
     # Switch the active map to another saved multi-map by its cloud map id
     # (novel/protobuf devices only). See async_map_load / build_map_load_command
@@ -480,6 +484,10 @@ class RoboVacMQTTEntity(CoordinatorEntity[EufyCleanCoordinator], StateVacuumEnti
         room_id, room_name = self.coordinator.room_id_at_normalized(x, y)
         return {"room_id": room_id, "room_name": room_name or ""}
 
+    async def async_get_map(self) -> ServiceResponse:
+        """Map snapshot for the map card; {} until the robot has sent a map."""
+        return self.coordinator.map_snapshot()
+
     async def async_map_load(self, cloud_mapid: int, seq: int = 1) -> None:
         """Switch the active map to a saved multi-map by its cloud map id.
 
@@ -566,6 +574,7 @@ class RoboVacMQTTEntity(CoordinatorEntity[EufyCleanCoordinator], StateVacuumEnti
             "active_zone_count": data.active_zone_count,
             "rooms": rooms,
             "segments": segments,
+            "last_map_edit": data.last_map_edit,
         }
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
@@ -689,19 +698,27 @@ class RoboVacMQTTEntity(CoordinatorEntity[EufyCleanCoordinator], StateVacuumEnti
             await self._async_handle_zone_clean({"zones": rects, "clean_times": int(p.get("clean_times", 2))})
             return
 
-        if command in ("rename_room", "merge_rooms", "divide_room") and isinstance(params, dict):
-            params = {"map_id": self.coordinator.data.map_id or 1, **params}
-            if command == "divide_room":
+        if command in MAP_EDIT_COMMANDS + ("goto", "map_rename", "map_delete"):
+            p = dict(params) if isinstance(params, dict) else {}
+            p.setdefault("map_id", self.coordinator.data.map_id or 1)
+            if command in MAP_EDIT_COMMANDS:
+                p["seq"] = self.coordinator.next_map_edit_seq()
+            if command in ("divide_room", "set_restricted_zones", "goto"):
                 if self.coordinator._map_data is None:
-                    raise HomeAssistantError("divide_room needs the map; run a clean first")
-                # line: [x0, y0, x1, y1] as fractions of the map image, like zone_clean
-                x0, y0, x1, y1 = params.pop("line")
-                params["points_cm"] = [
-                    self.coordinator.normalized_point_to_cm(x0, y0),
-                    self.coordinator.normalized_point_to_cm(x1, y1),
-                ]
+                    raise HomeAssistantError(f"{command} needs the map; run a clean first")
+                cm = self.coordinator.normalized_point_to_cm
+                # All geometry is fractions of the map image (0-1, top-left), like zone_clean.
+                if command == "divide_room":
+                    flat = p.pop("line")  # polyline [x0, y0, x1, y1, ...]
+                    p["points_cm"] = [cm(flat[i], flat[i + 1]) for i in range(0, len(flat) - 1, 2)]
+                elif command == "goto":
+                    p["x_cm"], p["y_cm"] = cm(p.pop("x"), p.pop("y"))
+                else:
+                    p["virtual_walls"] = [(cm(x0, y0), cm(x1, y1)) for x0, y0, x1, y1 in p.get("virtual_walls", [])]
+                    for key in ("forbidden_zones", "ban_mop_zones"):
+                        p[key] = [[cm(x, y) for x, y in quad] for quad in p.get(key, [])]
             await self.coordinator.async_send_command(
-                self.coordinator.build_device_command(command, **params)
+                self.coordinator.build_device_command(command, **p)
             )
             return
 
