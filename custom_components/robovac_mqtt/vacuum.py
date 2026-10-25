@@ -29,6 +29,7 @@ from homeassistant.helpers.issue_registry import (
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api.commands import build_command
+from .api.map_stream import carpet_rects
 from .const import (
     DOMAIN,
     EUFY_CLEAN_NOVEL_CLEAN_SPEED,
@@ -677,6 +678,31 @@ class RoboVacMQTTEntity(CoordinatorEntity[EufyCleanCoordinator], StateVacuumEnti
 
         if command == "zone_clean" and isinstance(params, dict):
             await self._async_handle_zone_clean(params)
+            return
+
+        if command == "carpet_clean":
+            md = self.coordinator._map_data
+            rects = carpet_rects(md)[:10] if md else []
+            if not rects:
+                raise HomeAssistantError("No robot-detected carpet on the map yet")
+            p = params if isinstance(params, dict) else {}
+            await self._async_handle_zone_clean({"zones": rects, "clean_times": int(p.get("clean_times", 2))})
+            return
+
+        if command in ("rename_room", "merge_rooms", "divide_room") and isinstance(params, dict):
+            params = {"map_id": self.coordinator.data.map_id or 1, **params}
+            if command == "divide_room":
+                if self.coordinator._map_data is None:
+                    raise HomeAssistantError("divide_room needs the map; run a clean first")
+                # line: [x0, y0, x1, y1] as fractions of the map image, like zone_clean
+                x0, y0, x1, y1 = params.pop("line")
+                params["points_cm"] = [
+                    self.coordinator.normalized_point_to_cm(x0, y0),
+                    self.coordinator.normalized_point_to_cm(x1, y1),
+                ]
+            await self.coordinator.async_send_command(
+                self.coordinator.build_device_command(command, **params)
+            )
             return
 
         # Handle Apple Home app_segment_clean command

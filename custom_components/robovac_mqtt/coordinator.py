@@ -555,18 +555,9 @@ class EufyCleanCoordinator(DataUpdateCoordinator[VacuumState]):
             wx = origin_x + nx * width  * res
             wy = origin_y + (height - 1 - ny * height) * res
         """
-        md = self._map_data
-        if md is None:
+        if self._map_data is None:
             return []
-        res = md.resolution or 5
-        w, h = md.width, md.height
-
-        def _to_cm(nx: float, ny: float) -> tuple[int, int]:
-            nx = min(max(float(nx), 0.0), 1.0)
-            ny = min(max(float(ny), 0.0), 1.0)
-            wx = md.origin_x + nx * w * res
-            wy = md.origin_y + (h - 1 - ny * h) * res
-            return round(wx), round(wy)
+        _to_cm = self.normalized_point_to_cm
 
         quads: list[list[tuple[int, int]]] = []
         for rect in rects:
@@ -586,6 +577,17 @@ class EufyCleanCoordinator(DataUpdateCoordinator[VacuumState]):
                 ]
             )
         return quads
+
+    def normalized_point_to_cm(self, nx: float, ny: float) -> tuple[int, int]:
+        """Convert one normalized map-image point to world cm (map must be loaded)."""
+        md = self._map_data
+        assert md is not None
+        res = md.resolution or 5
+        nx = min(max(float(nx), 0.0), 1.0)
+        ny = min(max(float(ny), 0.0), 1.0)
+        wx = md.origin_x + nx * md.width * res
+        wy = md.origin_y + (md.height - 1 - ny * md.height) * res
+        return round(wx), round(wy)
 
     def room_id_at_normalized(self, nx: float, ny: float) -> tuple[int, str | None]:
         """Resolve the (room id, name) under a normalized point on the rendered map.

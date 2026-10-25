@@ -22,6 +22,8 @@ _PIXEL_COLORS: dict[int, tuple[int, int, int]] = {
     3: (200, 200, 200), # CLEANED / carpet — same as free floor so it blends in
 }
 
+_CARPET_HATCH = (120, 80, 50)
+
 # Room ID → RGB.  Index 0 = wall/outside (unused in combined render); 1-N cycle.
 _ROOM_PALETTE: list[tuple[int, int, int]] = [
     (45, 45, 45),
@@ -194,6 +196,28 @@ def _quad_points(q: Any) -> list[tuple[int, int]]:
 # Main render
 # ---------------------------------------------------------------------------
 
+def carpet_rects(map_data: MapData, min_px: int = 80) -> list[tuple[float, float, float, float]]:
+    """Bounding boxes of robot-detected carpet blobs as normalized map-image rects, largest first."""
+    w, h, raw = map_data.width, map_data.height, map_data.raw_pixels
+    carpet = {i for i in range(min(w * h, len(raw) * 4)) if (raw[i >> 2] >> ((i & 3) * 2)) & 3 == 3}
+    blobs = []
+    while carpet:
+        stack, xs, ys = [carpet.pop()], [], []
+        while stack:
+            i = stack.pop()
+            xs.append(i % w)
+            ys.append(i // w)
+            # ponytail: ±1 wraps across row ends; carpets never touch the map edge
+            for j in (i - 1, i + 1, i - w, i + w):
+                if j in carpet:
+                    carpet.remove(j)
+                    stack.append(j)
+        if len(xs) >= min_px:
+            rect = (min(xs) / w, (h - 1 - max(ys)) / h, (max(xs) + 1) / w, (h - min(ys)) / h)
+            blobs.append((len(xs), rect))
+    return [r for _, r in sorted(blobs, reverse=True)]
+
+
 def render_map_png(
     map_data: MapData,
     robot_pixel: tuple[int, int] | None = None,
@@ -253,6 +277,8 @@ def render_map_png(
                         color = _PIXEL_COLORS.get(pv, (30, 30, 30))
                 else:
                     color = _PIXEL_COLORS.get(pv, (30, 30, 30))
+                if pv == 3 and (px_x + py) % 4 < 2:
+                    color = _CARPET_HATCH  # robot-detected carpet: diagonal stripes
                 colors.append(color)
                 if _has_room_names and rid > 0 and rid in map_data.room_names:
                     if rid not in src_centroids:

@@ -20,7 +20,7 @@ from ..const import (
     VOICE_CATALOG,
 )
 from ..proto.cloud.clean_param_pb2 import CleanParam, CleanParamRequest, Fan
-from ..proto.cloud.common_pb2 import Point, Quadrangle
+from ..proto.cloud.common_pb2 import Floor, Point, Quadrangle, RoomScene
 from ..proto.cloud.consumable_pb2 import ConsumableRequest
 from ..proto.cloud.control_pb2 import (
     ModeCtrlRequest,
@@ -358,6 +358,36 @@ def build_set_room_custom_command(
 
     value = encode_message(req)
     return {DPS_MAP["MAP_EDIT_REQUEST"]: value}
+
+
+FLOOR_TYPES = {"carpet": Floor.BLANKET, "wood": Floor.WOOD, "tile": Floor.CERAMIC}
+
+
+def build_map_edit_command(cmd: str, map_id: int, **kwargs: Any) -> dict[str, str]:
+    """Build a MapEditRequest for rename_room / merge_rooms / divide_room."""
+    req = MapEditRequest(map_id=int(map_id), seq=1)
+    if cmd == "rename_room":
+        req.method = MapEditRequest.RENAME_ROOM
+        desc = req.room_desc
+        desc.id = int(kwargs["room_id"])
+        if kwargs.get("name"):
+            desc.name = str(kwargs["name"])
+        if kwargs.get("floor"):
+            desc.floor.type = FLOOR_TYPES[str(kwargs["floor"]).lower()]
+        if kwargs.get("scene"):
+            desc.scene.type = RoomScene.Type.Value(
+                str(kwargs["scene"]).upper().replace(" ", "")
+            )
+    elif cmd == "merge_rooms":
+        req.method = MapEditRequest.MERGE_ROOMS
+        req.merge_rooms.room_ids.extend(int(r) for r in kwargs["room_ids"])
+    elif cmd == "divide_room":
+        req.method = MapEditRequest.DIVIDE_ROOM
+        req.divide_room.room_id = int(kwargs["room_id"])
+        req.divide_room.points.extend(Point(x=x, y=y) for x, y in kwargs["points_cm"])
+    else:
+        return {}
+    return {DPS_MAP["MAP_EDIT_REQUEST"]: encode_message(req)}
 
 
 def build_reset_accessory_command(reset_type: int) -> dict[str, str]:
@@ -704,5 +734,7 @@ def build_command(
         return build_set_activity_log_command(bool(kwargs.get("active", True)))
     if cmd == "detangle_brush":
         return {SCALAR_DPS["DETANGLE"]: 1}
+    if cmd in ("rename_room", "merge_rooms", "divide_room"):
+        return build_map_edit_command(cmd, kwargs.pop("map_id", 3), **kwargs)
 
     return {}
