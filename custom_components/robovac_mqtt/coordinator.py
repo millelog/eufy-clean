@@ -606,6 +606,20 @@ class EufyCleanCoordinator(DataUpdateCoordinator[VacuumState]):
         res = md.resolution or 5
         return [round((x_cm - md.origin_x) / res, 2), round(md.height - 1 - (y_cm - md.origin_y) / res, 2)]
 
+    def apply_room_desc(self, p: dict[str, Any]) -> None:
+        """A rename doesn't make the robot push a new map; show it until the next push."""
+        md, rid = self._map_data, int(p["room_id"])
+        if md is None:
+            return
+        md.room_names[rid] = p["name"]
+        meta = md.rooms_meta.setdefault(rid, {})
+        for key in ("floor", "scene"):
+            if p.get(key):
+                meta[key] = str(p[key]).lower()
+        for room in self.data.rooms:
+            if room.get("id") == rid:
+                room["name"] = p["name"]
+
     def map_snapshot(self) -> dict[str, Any]:
         """Everything the map card draws, geometry in grid pixels (see map_grid)."""
         md = self._map_data

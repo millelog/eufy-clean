@@ -720,6 +720,8 @@ class RoboVacMQTTEntity(CoordinatorEntity[EufyCleanCoordinator], StateVacuumEnti
             await self.coordinator.async_send_command(
                 self.coordinator.build_device_command(command, **p)
             )
+            if command == "rename_room":
+                self.coordinator.apply_room_desc(p)
             return
 
         # Handle Apple Home app_segment_clean command
